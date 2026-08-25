@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: MIT
 #
 
-pandas>=3.0.0
-spacy>=3.8.0
+pandas>=3.0.5
+spacy>=3.8.15
 textstat>=0.7.13
 vaderSentiment>=3.3.2
