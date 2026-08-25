@@ -36,6 +36,7 @@ interface CliArgs {
   includeInactive: boolean;
   outputJsonPath: string;
   outputCsvPath: string;
+  temperature?: number;
 }
 
 const DEFAULT_MODEL_ID = "gpt-5.2-2025-12-11";
@@ -131,6 +132,13 @@ const parseArgs = (): CliArgs => {
         parsed.outputCsvPath = path.resolve(value);
         index += 1;
         break;
+      case "--temperature":
+        parsed.temperature = Number(value);
+        if (Number.isNaN(parsed.temperature)) {
+          throw new Error(`Invalid --temperature value: ${value}`);
+        }
+        index += 1;
+        break;
       default:
         throw new Error(`Unknown argument: ${key}`);
     }
@@ -195,7 +203,7 @@ const main = async (): Promise<void> => {
     args.sqlPath,
     args.includeInactive,
   );
-  const modelClient = new JudgeModelClient(args.modelId);
+  const modelClient = new JudgeModelClient(args.modelId, args.temperature);
 
   const evaluationResult = await evaluateWithStrategy(
     args.strategy,

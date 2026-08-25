@@ -23,7 +23,8 @@
     "start:python-service": "cd python_service && python -m uvicorn huggingface_service:app --reload"
   },
   "dependencies": {
-    "openai": "^7.5.0"
+    "@google/genai": "^2.6.0",
+    "openai": "^4.20.0"
   },
   "devDependencies": {
     "@schmiedmayerlab/grove-configurations": "^0.1.1",

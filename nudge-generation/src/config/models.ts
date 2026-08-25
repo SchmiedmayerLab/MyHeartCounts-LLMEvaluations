@@ -28,6 +28,15 @@ export interface ModelConfig {
 export const MODEL_CONFIGS: ModelConfig[] = [
   // OpenAI models
   {
+    id: "gpt-5.4-2026-03-05",
+    provider: "openai",
+    displayName: "GPT-5.4",
+    enabled: true,
+    config: {
+      timeout: 60,
+    },
+  },
+  {
     id: "gpt-5.2-2025-12-11",
     provider: "openai",
     displayName: "GPT-5.2",
@@ -245,7 +254,7 @@ export const MODEL_CONFIGS: ModelConfig[] = [
     },
   },
   {
-    id: "gemini-2.5-pro",
+    id: "securegpt-gemini-2.5-pro",
     provider: "securegpt",
     displayName: "SecureGPT Gemini 2.5 Pro",
     enabled: true,
@@ -264,6 +273,34 @@ export const MODEL_CONFIGS: ModelConfig[] = [
       timeout: 120,
       endpoint:
         "https://apim.stanfordhealthcare.org/llama4-maverick/v1/chat/completions",
+    },
+  },
+  // Gemini Developer API models
+  {
+    id: "gemini-2.5-pro",
+    provider: "gemini",
+    displayName: "Gemini 2.5 Pro",
+    enabled: true,
+    config: {
+      timeout: 120,
+    },
+  },
+  {
+    id: "gemini-3.5-flash",
+    provider: "gemini",
+    displayName: "Gemini 3.5 Flash",
+    enabled: true,
+    config: {
+      timeout: 60,
+    },
+  },
+  {
+    id: "gemini-3.1-pro-preview",
+    provider: "gemini",
+    displayName: "Gemini 3.1 Pro Preview",
+    enabled: true,
+    config: {
+      timeout: 120,
     },
   },
 ];

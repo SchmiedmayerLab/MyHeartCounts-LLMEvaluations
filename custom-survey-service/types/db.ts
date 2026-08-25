@@ -30,6 +30,17 @@ export interface NudgeRow {
   source_model: string | null;
   metadata_json: Record<string, unknown>;
   active: boolean;
+  eligible_standard?: boolean;
+  eligible_doctor?: boolean;
+  eligible_redflag?: boolean;
+}
+
+export type SessionFlow = "standard" | "doctor" | "redflag";
+
+export interface SessionRow {
+  id: string;
+  evaluator_id: string;
+  flow: SessionFlow;
 }
 
 export interface EvaluatorRow {

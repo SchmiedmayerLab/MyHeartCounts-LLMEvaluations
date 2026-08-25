@@ -87,6 +87,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Stop immediately on first judge command failure.",
     )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Temperature for the judge model (default: 0.1).",
+    )
     return parser.parse_args()
 
 
@@ -124,6 +130,7 @@ def run_one(
     output_csv_path: Path,
     model_id: str,
     strategy: str,
+    temperature: float | None = None,
 ) -> int:
     cmd = [
         "npm",
@@ -143,6 +150,8 @@ def run_one(
         "--output-csv",
         str(output_csv_path),
     ]
+    if temperature is not None:
+        cmd.extend(["--temperature", str(temperature)])
     result = subprocess.run(cmd, cwd=repo_root)
     return result.returncode
 
@@ -216,6 +225,7 @@ def main() -> int:
                 output_csv_path=output_csv_path,
                 model_id=args.model_id,
                 strategy=args.strategy,
+                temperature=args.temperature,
             )
             if return_code == 0:
                 succeeded += 1

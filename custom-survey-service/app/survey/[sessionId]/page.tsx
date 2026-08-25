@@ -9,7 +9,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 interface Nudge {
@@ -32,12 +32,16 @@ interface Question {
 interface SessionPayload {
   sessionId: string;
   evaluatorId: string;
+  flow: "standard" | "doctor" | "redflag";
   bundle: { id: string; name: string };
   nudges: Nudge[];
   questions: Question[];
 }
 
-type ScoreMap = Record<string, number>;
+type ScoreMap = Record<string, number | undefined>;
+type CommentMap = Record<string, string | undefined>;
+
+const LOW_SCORE_THRESHOLD = 3;
 type MetadataField =
   | "gender"
   | "comorbidities"
@@ -80,6 +84,46 @@ const readPromptMetadata = (nudge: Nudge): Record<string, unknown> => {
   const topLevel = asRecord(nudge.metadata_json) ?? {};
   const nested = asRecord(topLevel.prompt_metadata);
   return nested ?? topLevel;
+};
+
+const readPromptContext = (nudge: Nudge): Record<string, unknown> => {
+  const topLevel = asRecord(nudge.metadata_json) ?? {};
+  return asRecord(topLevel.prompt_context) ?? {};
+};
+
+interface DiseaseDescription {
+  label: string;
+  description: string;
+}
+
+// Collect unique (disease label -> description) pairs across the nudges shown
+// in the current session. The disease label comes from
+// `prompt_metadata.comorbidities` and the long description from
+// `prompt_context.comorbidities`, both of which the importer populates from
+// the generator CSV (which itself sources them from
+// `nudge-generation/config/prompts/prompt_constants.v1.json`). Pulling from
+// the per-nudge metadata avoids a second source of truth and works even if
+// the prompt_constants file is updated after nudges were imported.
+const collectDiseaseDescriptions = (nudges: Nudge[]): DiseaseDescription[] => {
+  const byLabel = new Map<string, string>();
+  for (const nudge of nudges) {
+    const promptMetadata = readPromptMetadata(nudge);
+    const promptContext = readPromptContext(nudge);
+    const rawLabel = promptMetadata.comorbidities;
+    const rawDescription = promptContext.comorbidities;
+    const label = typeof rawLabel === "string" ? rawLabel.trim() : "";
+    const description =
+      typeof rawDescription === "string" ? rawDescription.trim() : "";
+    if (!label || !description) {
+      continue;
+    }
+    if (!byLabel.has(label)) {
+      byLabel.set(label, description);
+    }
+  }
+  return Array.from(byLabel.entries())
+    .map(([label, description]) => ({ label, description }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 };
 
 const fieldForQuestion = (stableKey: string): MetadataField | null => {
@@ -151,13 +195,16 @@ const metadataForQuestion = (
 
   const promptMetadata = readPromptMetadata(nudge);
   const rawValue = promptMetadata[field];
-  if (typeof rawValue !== "string") {
+  const trimmedValue = typeof rawValue === "string" ? rawValue.trim() : "";
+
+  // For comorbidities, an empty/missing value is meaningful (the patient has
+  // no listed comorbidities), so surface that explicitly as "None" instead of
+  // hiding the pill entirely.
+  if (!trimmedValue && field !== "comorbidities") {
     return [];
   }
-  const value = rawValue.trim();
-  if (!value) {
-    return [];
-  }
+  const value =
+    field === "comorbidities" && !trimmedValue ? "None" : trimmedValue;
 
   const rows: MetadataDisplayRow[] = [{ label: labelForField(field), value }];
   if (field === "stage_of_change") {
@@ -172,57 +219,6 @@ const metadataForQuestion = (
   return rows;
 };
 
-const NudgeScoreRow = ({
-  question,
-  nudge,
-  scores,
-  onSelectScore,
-}: Readonly<{
-  question: Question;
-  nudge: Nudge;
-  scores: ScoreMap;
-  onSelectScore: (key: string, scoreValue: number) => void;
-}>) => (
-  <tr>
-    <td className="nudge-cell">
-      <strong>{nudge.title}</strong>
-      <div>{nudge.body}</div>
-      <div className="nudge-metadata">
-        {metadataForQuestion(question, nudge).map((entry) => (
-          <span
-            key={`${question.id}:${nudge.id}:${entry.label}`}
-            className="metadata-pill"
-          >
-            {entry.label}: {entry.value}
-          </span>
-        ))}
-      </div>
-    </td>
-    {(question.response_type === "yes_no" ? [1, 7] : [1, 2, 3, 4, 5, 6, 7]).map(
-      (scoreValue) => {
-        const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
-
-        return (
-          <td key={scoreValue} className="matrix-score-cell">
-            <label htmlFor={inputId} className="matrix-score-hit-area">
-              <input
-                id={inputId}
-                className="matrix-score-radio"
-                type="radio"
-                name={keyFor(question.id, nudge.id)}
-                checked={scores[keyFor(question.id, nudge.id)] === scoreValue}
-                onChange={() => {
-                  onSelectScore(keyFor(question.id, nudge.id), scoreValue);
-                }}
-              />
-            </label>
-          </td>
-        );
-      },
-    )}
-  </tr>
-);
-
 export default function SurveyPage({
   params,
 }: Readonly<{
@@ -232,11 +228,9 @@ export default function SurveyPage({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [scores, setScores] = useState<ScoreMap>({});
-
-  const setScore = (key: string, scoreValue: number) => {
-    setScores((current) => ({ ...current, [key]: scoreValue }));
-  };
+  const [comments, setComments] = useState<CommentMap>({});
   const [submitting, setSubmitting] = useState(false);
+  const [submittedSuccessfully, setSubmittedSuccessfully] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -279,6 +273,44 @@ export default function SurveyPage({
     );
   }, [session]);
 
+  const diseaseDescriptions = useMemo<DiseaseDescription[]>(() => {
+    if (session?.flow !== "doctor") {
+      return [];
+    }
+    return collectDiseaseDescriptions(session.nudges);
+  }, [session]);
+
+  // Warn the evaluator before they accidentally close the tab, hit Back, or
+  // reload while they have in-progress responses. Modern browsers ignore the
+  // custom returnValue string and always show their own generic prompt; this
+  // only triggers for real browser navigations (not in-app router.push), so
+  // the post-submit redirect to the confirmation page is unaffected. We also
+  // suppress the listener once the submission has succeeded.
+  const hasUnsavedWork = useMemo(() => {
+    const anyScores = Object.values(scores).some(
+      (value) => typeof value === "number",
+    );
+    if (anyScores) {
+      return true;
+    }
+    return Object.values(comments).some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    );
+  }, [scores, comments]);
+
+  useEffect(() => {
+    if (!hasUnsavedWork || submittedSuccessfully) {
+      return;
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [hasUnsavedWork, submittedSuccessfully]);
+
   const answeredRequiredCount = useMemo(() => {
     if (!session) {
       return 0;
@@ -320,13 +352,45 @@ export default function SurveyPage({
         throw new Error("Please score all required cells in the matrix.");
       }
 
+      const isDoctorFlow = session.flow === "doctor";
+      if (isDoctorFlow) {
+        const missingLowScoreExplanation = responses.some((entry) => {
+          if (entry.optional || typeof entry.score !== "number") {
+            return false;
+          }
+          if (entry.score > LOW_SCORE_THRESHOLD) {
+            return false;
+          }
+          const trimmedComment =
+            comments[keyFor(entry.questionId, entry.nudgeId)]?.trim() ?? "";
+          return trimmedComment.length === 0;
+        });
+        if (missingLowScoreExplanation) {
+          throw new Error(
+            `Please add a written explanation for every nudge you scored ${LOW_SCORE_THRESHOLD} or lower before submitting.`,
+          );
+        }
+      }
+
       const responsePayload = responses
-        .filter((entry) => typeof entry.score === "number")
-        .map((entry) => ({
-          questionId: entry.questionId,
-          nudgeId: entry.nudgeId,
-          score: entry.score,
-        }));
+        .filter(
+          (entry): entry is typeof entry & { score: number } =>
+            typeof entry.score === "number",
+        )
+        .map((entry) => {
+          const trimmedComment =
+            comments[keyFor(entry.questionId, entry.nudgeId)]?.trim() ?? "";
+          const includeComment =
+            isDoctorFlow &&
+            entry.score <= LOW_SCORE_THRESHOLD &&
+            trimmedComment.length > 0;
+          return {
+            questionId: entry.questionId,
+            nudgeId: entry.nudgeId,
+            score: entry.score,
+            ...(includeComment ? { comment: trimmedComment } : {}),
+          };
+        });
 
       const response = await fetch("/api/responses/bulk", {
         method: "POST",
@@ -342,6 +406,7 @@ export default function SurveyPage({
         throw new Error("Submission failed.");
       }
 
+      setSubmittedSuccessfully(true);
       router.push("/survey/confirmation");
     } catch (requestError) {
       setError(
@@ -370,8 +435,9 @@ export default function SurveyPage({
           Bundle: <strong>{session.bundle.name}</strong>
         </p>
         <p className="muted">
-          Complete all matrix cells. This session uses the same 4 nudges for all
-          selected questions.
+          {session.flow === "doctor"
+            ? `Complete all rows. This session asks one clinical safety question across ${session.nudges.length} nudges. Any nudge you score 3 or lower requires a 1-3 sentence explanation (encouraged to be thorough) in the box that appears below that row before you can submit.`
+            : `Complete all matrix cells. This session uses the same ${session.nudges.length} nudges for all selected questions.`}
         </p>
         <p>
           Progress: {answeredRequiredCount}/{requiredAnswerCount}
@@ -389,6 +455,28 @@ export default function SurveyPage({
               <ReactMarkdown>{question.body_markdown}</ReactMarkdown>
             </div>
           ) : null}
+          {session.flow === "doctor" && diseaseDescriptions.length > 0 ? (
+            <div className="disease-context-panel">
+              <h4 className="disease-context-heading">
+                Patient disease context
+              </h4>
+              <p className="muted disease-context-intro">
+                The nudges below were generated for participants with the
+                following condition{diseaseDescriptions.length > 1 ? "s" : ""}.
+                Reference these descriptions when judging clinical safety.
+              </p>
+              <dl className="disease-context-list">
+                {diseaseDescriptions.map((entry) => (
+                  <div key={entry.label} className="disease-context-item">
+                    <dt className="disease-context-label">{entry.label}</dt>
+                    <dd className="disease-context-description">
+                      {entry.description}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ) : null}
           <table className="matrix">
             <thead>
               <tr>
@@ -401,15 +489,98 @@ export default function SurveyPage({
               </tr>
             </thead>
             <tbody>
-              {session.nudges.map((nudge) => (
-                <NudgeScoreRow
-                  key={nudge.id}
-                  question={question}
-                  nudge={nudge}
-                  scores={scores}
-                  onSelectScore={setScore}
-                />
-              ))}
+              {session.nudges.map((nudge) => {
+                const cellKey = keyFor(question.id, nudge.id);
+                const currentScore = scores[cellKey];
+                const showLowScoreComment =
+                  session.flow === "doctor" &&
+                  question.response_type === "likert_1_7" &&
+                  typeof currentScore === "number" &&
+                  currentScore <= LOW_SCORE_THRESHOLD;
+                const scoreValues =
+                  question.response_type === "yes_no"
+                    ? [1, 7]
+                    : [1, 2, 3, 4, 5, 6, 7];
+                const totalCols = scoreValues.length + 1;
+                return (
+                  <Fragment key={nudge.id}>
+                    <tr>
+                      <td className="nudge-cell">
+                        <strong>{nudge.title}</strong>
+                        <div>{nudge.body}</div>
+                        <div className="nudge-metadata">
+                          {metadataForQuestion(question, nudge).map((entry) => (
+                            <span
+                              key={`${question.id}:${nudge.id}:${entry.label}`}
+                              className="metadata-pill"
+                            >
+                              {entry.label}: {entry.value}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      {scoreValues.map((scoreValue) => {
+                        const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
+
+                        return (
+                          <td key={scoreValue} className="matrix-score-cell">
+                            <label
+                              htmlFor={inputId}
+                              className="matrix-score-hit-area"
+                            >
+                              <input
+                                id={inputId}
+                                className="matrix-score-radio"
+                                type="radio"
+                                name={cellKey}
+                                checked={currentScore === scoreValue}
+                                onChange={() =>
+                                  setScores((current) => ({
+                                    ...current,
+                                    [cellKey]: scoreValue,
+                                  }))
+                                }
+                              />
+                            </label>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    {showLowScoreComment ? (
+                      <tr>
+                        <td
+                          colSpan={totalCols}
+                          className="low-score-comment-cell"
+                        >
+                          <label
+                            htmlFor={`comment-${question.id}-${nudge.id}`}
+                            className="low-score-comment-label"
+                          >
+                            You scored this nudge {currentScore}. Briefly
+                            explain (1-3 sentences) why you scored it this low
+                            (required):
+                          </label>
+                          <textarea
+                            id={`comment-${question.id}-${nudge.id}`}
+                            className="low-score-comment-textarea"
+                            rows={3}
+                            required
+                            aria-required="true"
+                            value={comments[cellKey] ?? ""}
+                            onChange={(event) =>
+                              setComments((current) => ({
+                                ...current,
+                                [cellKey]: event.target.value,
+                              }))
+                            }
+                            placeholder="Required to submit. 1-3 sentences encouraged."
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

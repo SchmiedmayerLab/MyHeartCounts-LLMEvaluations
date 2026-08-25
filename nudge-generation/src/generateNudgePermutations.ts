@@ -93,6 +93,7 @@ class NudgePermutationTester {
     private openAIApiKey: string | undefined,
     private pythonServiceUrl = "http://localhost:8000",
     private secureGPTApiKey?: string | undefined,
+    private geminiApiKey?: string | undefined,
   ) {}
 
   private getActivityTypeContext(preferredWorkoutTypes: string): string {
@@ -556,6 +557,7 @@ class NudgePermutationTester {
           this.openAIApiKey,
           this.pythonServiceUrl,
           this.secureGPTApiKey,
+          this.geminiApiKey,
         );
       } catch (error) {
         console.error(
@@ -786,6 +788,7 @@ const main = async () => {
   const cliArgs = parseCLIArgs();
   const openAIApiKey = process.env.OPENAI_API_KEY;
   const secureGPTApiKey = process.env.SECUREGPT_API_KEY;
+  const geminiApiKey = process.env.GEMINI_API_KEY;
   const pythonServiceUrl = cliArgs.pythonServiceUrl ?? "http://localhost:8000";
 
   const modelsToTest = selectModels(cliArgs);
@@ -813,6 +816,14 @@ const main = async () => {
     process.exit(1);
   }
 
+  const needsGemini = modelsToTest.some((m) => m.provider === "gemini");
+  if (needsGemini && !geminiApiKey) {
+    console.error(
+      "GEMINI_API_KEY environment variable is required for Gemini models",
+    );
+    process.exit(1);
+  }
+
   if (cliArgs.maxPermutations) {
     console.log(
       `Starting nudge permutation testing (sample mode: ${cliArgs.maxPermutations} permutations${cliArgs.randomize ? ", randomly selected" : ""})...`,
@@ -827,6 +838,7 @@ const main = async () => {
     openAIApiKey,
     pythonServiceUrl,
     secureGPTApiKey,
+    geminiApiKey,
   );
   if (cliArgs.contextsJsonPath && cliArgs.maxPermutations) {
     console.warn(

@@ -55,8 +55,9 @@ export class OpenAIBackend implements ModelBackend {
               content: prompt,
             },
           ],
-          max_tokens: options?.maxTokens,
-          temperature: options?.temperature,
+          max_completion_tokens:
+            options?.maxTokens ? Math.max(options.maxTokens, 8192) : undefined,
+          reasoning_effort: "low",
           response_format: responseFormat ?? {
             type: "json_schema",
             json_schema: {
