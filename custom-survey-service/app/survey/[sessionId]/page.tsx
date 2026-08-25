@@ -219,6 +219,96 @@ const metadataForQuestion = (
   return rows;
 };
 
+const NudgeScoreRow = ({
+  question,
+  nudge,
+  cellKey,
+  score,
+  comment,
+  showLowScoreComment,
+  onSelectScore,
+  onChangeComment,
+}: Readonly<{
+  question: Question;
+  nudge: Nudge;
+  cellKey: string;
+  score: number | undefined;
+  comment: string;
+  showLowScoreComment: boolean;
+  onSelectScore: (key: string, scoreValue: number) => void;
+  onChangeComment: (key: string, value: string) => void;
+}>) => {
+  const scoreValues =
+    question.response_type === "yes_no" ? [1, 7] : [1, 2, 3, 4, 5, 6, 7];
+  const commentId = `comment-${question.id}-${nudge.id}`;
+
+  return (
+    <Fragment>
+      <tr>
+        <td className="nudge-cell">
+          <strong>{nudge.title}</strong>
+          <div>{nudge.body}</div>
+          <div className="nudge-metadata">
+            {metadataForQuestion(question, nudge).map((entry) => (
+              <span
+                key={`${question.id}:${nudge.id}:${entry.label}`}
+                className="metadata-pill"
+              >
+                {entry.label}: {entry.value}
+              </span>
+            ))}
+          </div>
+        </td>
+        {scoreValues.map((scoreValue) => {
+          const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
+
+          return (
+            <td key={scoreValue} className="matrix-score-cell">
+              <label htmlFor={inputId} className="matrix-score-hit-area">
+                <input
+                  id={inputId}
+                  className="matrix-score-radio"
+                  type="radio"
+                  name={cellKey}
+                  checked={score === scoreValue}
+                  onChange={() => {
+                    onSelectScore(cellKey, scoreValue);
+                  }}
+                />
+              </label>
+            </td>
+          );
+        })}
+      </tr>
+      {showLowScoreComment ? (
+        <tr>
+          <td
+            colSpan={scoreValues.length + 1}
+            className="low-score-comment-cell"
+          >
+            <label htmlFor={commentId} className="low-score-comment-label">
+              You scored this nudge {score}. Briefly explain (1-3 sentences) why
+              you scored it this low (required):
+            </label>
+            <textarea
+              id={commentId}
+              className="low-score-comment-textarea"
+              rows={3}
+              required
+              aria-required="true"
+              value={comment}
+              onChange={(event) => {
+                onChangeComment(cellKey, event.target.value);
+              }}
+              placeholder="Required to submit. 1-3 sentences encouraged."
+            />
+          </td>
+        </tr>
+      ) : null}
+    </Fragment>
+  );
+};
+
 export default function SurveyPage({
   params,
 }: Readonly<{
@@ -232,6 +322,14 @@ export default function SurveyPage({
   const [submitting, setSubmitting] = useState(false);
   const [submittedSuccessfully, setSubmittedSuccessfully] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const setScore = (key: string, scoreValue: number) => {
+    setScores((current) => ({ ...current, [key]: scoreValue }));
+  };
+
+  const setComment = (key: string, value: string) => {
+    setComments((current) => ({ ...current, [key]: value }));
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -492,93 +590,24 @@ export default function SurveyPage({
               {session.nudges.map((nudge) => {
                 const cellKey = keyFor(question.id, nudge.id);
                 const currentScore = scores[cellKey];
-                const showLowScoreComment =
-                  session.flow === "doctor" &&
-                  question.response_type === "likert_1_7" &&
-                  typeof currentScore === "number" &&
-                  currentScore <= LOW_SCORE_THRESHOLD;
-                const scoreValues =
-                  question.response_type === "yes_no"
-                    ? [1, 7]
-                    : [1, 2, 3, 4, 5, 6, 7];
-                const totalCols = scoreValues.length + 1;
-                return (
-                  <Fragment key={nudge.id}>
-                    <tr>
-                      <td className="nudge-cell">
-                        <strong>{nudge.title}</strong>
-                        <div>{nudge.body}</div>
-                        <div className="nudge-metadata">
-                          {metadataForQuestion(question, nudge).map((entry) => (
-                            <span
-                              key={`${question.id}:${nudge.id}:${entry.label}`}
-                              className="metadata-pill"
-                            >
-                              {entry.label}: {entry.value}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      {scoreValues.map((scoreValue) => {
-                        const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
 
-                        return (
-                          <td key={scoreValue} className="matrix-score-cell">
-                            <label
-                              htmlFor={inputId}
-                              className="matrix-score-hit-area"
-                            >
-                              <input
-                                id={inputId}
-                                className="matrix-score-radio"
-                                type="radio"
-                                name={cellKey}
-                                checked={currentScore === scoreValue}
-                                onChange={() =>
-                                  setScores((current) => ({
-                                    ...current,
-                                    [cellKey]: scoreValue,
-                                  }))
-                                }
-                              />
-                            </label>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {showLowScoreComment ? (
-                      <tr>
-                        <td
-                          colSpan={totalCols}
-                          className="low-score-comment-cell"
-                        >
-                          <label
-                            htmlFor={`comment-${question.id}-${nudge.id}`}
-                            className="low-score-comment-label"
-                          >
-                            You scored this nudge {currentScore}. Briefly
-                            explain (1-3 sentences) why you scored it this low
-                            (required):
-                          </label>
-                          <textarea
-                            id={`comment-${question.id}-${nudge.id}`}
-                            className="low-score-comment-textarea"
-                            rows={3}
-                            required
-                            aria-required="true"
-                            value={comments[cellKey] ?? ""}
-                            onChange={(event) =>
-                              setComments((current) => ({
-                                ...current,
-                                [cellKey]: event.target.value,
-                              }))
-                            }
-                            placeholder="Required to submit. 1-3 sentences encouraged."
-                          />
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
+                return (
+                  <NudgeScoreRow
+                    key={nudge.id}
+                    question={question}
+                    nudge={nudge}
+                    cellKey={cellKey}
+                    score={currentScore}
+                    comment={comments[cellKey] ?? ""}
+                    showLowScoreComment={
+                      session.flow === "doctor" &&
+                      question.response_type === "likert_1_7" &&
+                      typeof currentScore === "number" &&
+                      currentScore <= LOW_SCORE_THRESHOLD
+                    }
+                    onSelectScore={setScore}
+                    onChangeComment={setComment}
+                  />
                 );
               })}
             </tbody>

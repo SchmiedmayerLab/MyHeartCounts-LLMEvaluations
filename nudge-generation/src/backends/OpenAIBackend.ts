@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: MIT
 //
 
-import OpenAI from "openai";
+import { OpenAI } from "openai";
 import { type ModelBackend, type GenerateOptions } from "./ModelBackend.js";
 import { type ModelConfig } from "../config/models.js";
 import {

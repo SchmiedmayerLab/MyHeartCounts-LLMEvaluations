@@ -184,22 +184,72 @@ const buildMetadataJson = (row: CsvRow): Record<string, unknown> => {
   };
 };
 
-const main = async () => {
-  const args = parseArgs();
+interface ExistingNudgeRow {
+  id: string;
+  title: string;
+  body: string;
+  dedupe_key: string;
+  eligible_standard: boolean;
+  eligible_doctor: boolean;
+  eligible_redflag: boolean;
+  active: boolean;
+}
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+interface ReconcileItem {
+  existingId: string;
+  existingTitle: string;
+  matchedBy: "dedupe_key" | "content";
+  currentEligibleStandard: boolean;
+  currentEligibleDoctor: boolean;
+  currentEligibleRedflag: boolean;
+}
+
+const createServiceClient = (url: string, serviceRoleKey: string) =>
+  createClient(url, serviceRoleKey, { auth: { persistSession: false } });
+
+// Derived from the factory above so helpers share the exact client type that
+// `createClient` infers; `ReturnType<typeof createClient>` resolves its
+// generics to `never` and does not match.
+type ServiceClient = ReturnType<typeof createServiceClient>;
+
+const contentKey = (title: string, body: string): string =>
+  `${title}\u0000${body}`;
+
+const nudgesFromRow = (
+  row: CsvRow,
+  args: ParsedArgs,
+  parsedNudges: Array<{ title: string; body: string }>,
+): Nudge[] => {
+  const metadataJson = buildMetadataJson(row);
+  const metadataFingerprint = JSON.stringify(metadataJson);
+  const collected: Nudge[] = [];
+  for (const nudge of parsedNudges) {
+    const title = nudge.title.trim();
+    const body = nudge.body.trim();
+    if (!title || !body) {
+      continue;
+    }
+    collected.push({
+      title,
+      body,
+      source_model: row.modelId ?? null,
+      dedupe_key: stableHash(
+        `${title}::${body}::${row.modelId ?? ""}::${metadataFingerprint}`,
+      ),
+      metadata_json: metadataJson,
+      active: true,
+      eligible_standard: args.eligibleStandard,
+      eligible_doctor: args.eligibleDoctor,
+      eligible_redflag: args.eligibleRedflag,
+    });
   }
+  return collected;
+};
 
-  const absolutePath = path.resolve(args.csvPath);
-  const content = await fs.readFile(absolutePath, "utf-8");
-  const rows: CsvRow[] = parse(content, {
-    columns: true,
-    skip_empty_lines: true,
-  });
-
+const collectNudges = (
+  rows: CsvRow[],
+  args: ParsedArgs,
+): { nudges: Nudge[]; skippedMalformedJsonRows: number } => {
   const nudges: Nudge[] = [];
   let skippedMalformedJsonRows = 0;
   for (const [index, row] of rows.entries()) {
@@ -218,94 +268,39 @@ const main = async () => {
       );
       continue;
     }
-    const metadataJson = buildMetadataJson(row);
-    const metadataFingerprint = JSON.stringify(metadataJson);
-    for (const nudge of parsedNudges) {
-      const title = nudge.title.trim();
-      const body = nudge.body.trim();
-      if (!title || !body) {
-        continue;
-      }
-      nudges.push({
-        title,
-        body,
-        source_model: row.modelId ?? null,
-        dedupe_key: stableHash(
-          `${title}::${body}::${row.modelId ?? ""}::${metadataFingerprint}`,
-        ),
-        metadata_json: metadataJson,
-        active: true,
-        eligible_standard: args.eligibleStandard,
-        eligible_doctor: args.eligibleDoctor,
-        eligible_redflag: args.eligibleRedflag,
-      });
-    }
+    nudges.push(...nudgesFromRow(row, args, parsedNudges));
   }
+  return { nudges, skippedMalformedJsonRows };
+};
 
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false },
-  });
-
-  // Pre-fetch existing rows for two reasons:
-  // 1. Reconcile-by-content: a CSV nudge whose (title, body) matches a row
-  //    in the DB but has different metadata/model would otherwise be inserted
-  //    as a duplicate. We want to *flip eligibility flags* on the existing
-  //    row instead of inserting a near-duplicate, and we want to OR flags so
-  //    that re-running with --eligible-doctor=true never demotes an existing
-  //    standard nudge.
-  // 2. Reporting: print a clear summary of new vs. matched-by-content rows.
-  interface ExistingNudgeRow {
-    id: string;
-    title: string;
-    body: string;
-    dedupe_key: string;
-    eligible_standard: boolean;
-    eligible_doctor: boolean;
-    eligible_redflag: boolean;
-    active: boolean;
-  }
-  const { data: existingRowsRaw, error: existingFetchError } = await supabase
-    .from("nudges")
-    .select(
-      "id, title, body, dedupe_key, eligible_standard, eligible_doctor, eligible_redflag, active",
-    );
-  if (existingFetchError) {
-    throw existingFetchError;
-  }
-  const existingRows = existingRowsRaw as ExistingNudgeRow[];
-
+// Partition CSV nudges into:
+//   - rowsToInsert: no DB match by dedupe_key OR by (title, body). Pure
+//     new rows, inserted with the requested eligibility flags as-is.
+//   - rowsToReconcile: a DB match exists (either by dedupe_key, or by
+//     content under different metadata). We never insert these. We only
+//     UPDATE the eligibility flags using OR semantics so re-running with
+//     a narrower flag set (for example --eligible-standard=false during a
+//     doctor-flow import) never demotes a row that was already in the
+//     standard pool.
+const partitionNudges = (
+  nudges: Nudge[],
+  existingRows: ExistingNudgeRow[],
+): { rowsToInsert: Nudge[]; rowsToReconcile: ReconcileItem[] } => {
   const existingByDedupeKey = new Map<string, ExistingNudgeRow>();
   const existingByContent = new Map<string, ExistingNudgeRow>();
   for (const row of existingRows) {
     existingByDedupeKey.set(row.dedupe_key, row);
-    existingByContent.set(`${row.title}\u0000${row.body}`, row);
+    existingByContent.set(contentKey(row.title, row.body), row);
   }
 
-  // Partition CSV nudges into:
-  //   - rowsToInsert: no DB match by dedupe_key OR by (title, body). Pure
-  //     new rows, inserted with the requested eligibility flags as-is.
-  //   - rowsToReconcile: a DB match exists (either by dedupe_key, or by
-  //     content under different metadata). We never insert these. We only
-  //     UPDATE the eligibility flags using OR semantics so re-running with
-  //     a narrower flag set (for example --eligible-standard=false during a
-  //     doctor-flow import) never demotes a row that was already in the
-  //     standard pool.
   const rowsToInsert: Nudge[] = [];
-  interface ReconcileItem {
-    existingId: string;
-    existingTitle: string;
-    matchedBy: "dedupe_key" | "content";
-    currentEligibleStandard: boolean;
-    currentEligibleDoctor: boolean;
-    currentEligibleRedflag: boolean;
-  }
   const rowsToReconcile: ReconcileItem[] = [];
   const seenExistingIds = new Set<string>();
 
   for (const csvNudge of nudges) {
     const dedupeMatch = existingByDedupeKey.get(csvNudge.dedupe_key);
     const contentMatch = existingByContent.get(
-      `${csvNudge.title}\u0000${csvNudge.body}`,
+      contentKey(csvNudge.title, csvNudge.body),
     );
     const match = dedupeMatch ?? contentMatch;
     if (!match) {
@@ -327,19 +322,17 @@ const main = async () => {
     });
   }
 
-  // Step 1: insert pure-new rows. We use a plain insert (no upsert) because
-  // partitioning above guarantees there is no existing row with the same
-  // dedupe_key.
-  if (rowsToInsert.length > 0) {
-    const { error: insertError } = await supabase
-      .from("nudges")
-      .insert(rowsToInsert);
-    if (insertError) {
-      throw insertError;
-    }
-  }
+  return { rowsToInsert, rowsToReconcile };
+};
 
-  // Step 2: reconcile existing-row matches with OR'd eligibility flags.
+// Reconcile existing-row matches with OR'd eligibility flags. Returns the
+// number of rows actually updated; rows whose flags are already correct are
+// left untouched.
+const reconcileEligibility = async (
+  supabase: ServiceClient,
+  rowsToReconcile: ReconcileItem[],
+  args: ParsedArgs,
+): Promise<number> => {
   let reconciledRowsTouched = 0;
   for (const reconcile of rowsToReconcile) {
     const nextStandard =
@@ -367,7 +360,19 @@ const main = async () => {
     }
     reconciledRowsTouched += 1;
   }
+  return reconciledRowsTouched;
+};
 
+const printSummary = (summary: {
+  absolutePath: string;
+  args: ParsedArgs;
+  parsedNudgeCount: number;
+  insertedCount: number;
+  reconciledRowsTouched: number;
+  rowsToReconcile: ReconcileItem[];
+  skippedMalformedJsonRows: number;
+}): void => {
+  const { args, rowsToReconcile } = summary;
   const matchedByDedupe = rowsToReconcile.filter(
     (r) => r.matchedBy === "dedupe_key",
   ).length;
@@ -375,11 +380,11 @@ const main = async () => {
     (r) => r.matchedBy === "content",
   ).length;
 
-  console.log(`Imported from ${absolutePath}`);
-  console.log(`  CSV nudges parsed: ${nudges.length}`);
-  console.log(`  Inserted as new: ${rowsToInsert.length}`);
+  console.log(`Imported from ${summary.absolutePath}`);
+  console.log(`  CSV nudges parsed: ${summary.parsedNudgeCount}`);
+  console.log(`  Inserted as new: ${summary.insertedCount}`);
   console.log(
-    `  Existing matches reconciled (OR'd flags): ${reconciledRowsTouched} of ${rowsToReconcile.length}`,
+    `  Existing matches reconciled (OR'd flags): ${summary.reconciledRowsTouched} of ${rowsToReconcile.length}`,
   );
   console.log(
     `    by dedupe_key (same content + metadata): ${matchedByDedupe}`,
@@ -398,11 +403,83 @@ const main = async () => {
       );
     }
   }
-  if (skippedMalformedJsonRows > 0) {
+  if (summary.skippedMalformedJsonRows > 0) {
     console.log(
-      `  Skipped ${skippedMalformedJsonRows} CSV row(s) due to malformed JSON.`,
+      `  Skipped ${summary.skippedMalformedJsonRows} CSV row(s) due to malformed JSON.`,
     );
   }
+};
+
+const main = async () => {
+  const args = parseArgs();
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
+  const absolutePath = path.resolve(args.csvPath);
+  const content = await fs.readFile(absolutePath, "utf-8");
+  const rows: CsvRow[] = parse(content, {
+    columns: true,
+    skip_empty_lines: true,
+  });
+
+  const { nudges, skippedMalformedJsonRows } = collectNudges(rows, args);
+
+  const supabase = createServiceClient(supabaseUrl, supabaseServiceRoleKey);
+
+  // Pre-fetch existing rows for two reasons:
+  // 1. Reconcile-by-content: a CSV nudge whose (title, body) matches a row
+  //    in the DB but has different metadata/model would otherwise be inserted
+  //    as a duplicate. We want to *flip eligibility flags* on the existing
+  //    row instead of inserting a near-duplicate, and we want to OR flags so
+  //    that re-running with --eligible-doctor=true never demotes an existing
+  //    standard nudge.
+  // 2. Reporting: print a clear summary of new vs. matched-by-content rows.
+  const { data: existingRowsRaw, error: existingFetchError } = await supabase
+    .from("nudges")
+    .select(
+      "id, title, body, dedupe_key, eligible_standard, eligible_doctor, eligible_redflag, active",
+    );
+  if (existingFetchError) {
+    throw existingFetchError;
+  }
+
+  const { rowsToInsert, rowsToReconcile } = partitionNudges(
+    nudges,
+    existingRowsRaw,
+  );
+
+  // Step 1: insert pure-new rows. We use a plain insert (no upsert) because
+  // partitioning above guarantees there is no existing row with the same
+  // dedupe_key.
+  if (rowsToInsert.length > 0) {
+    const { error: insertError } = await supabase
+      .from("nudges")
+      .insert(rowsToInsert);
+    if (insertError) {
+      throw insertError;
+    }
+  }
+
+  // Step 2: reconcile existing-row matches with OR'd eligibility flags.
+  const reconciledRowsTouched = await reconcileEligibility(
+    supabase,
+    rowsToReconcile,
+    args,
+  );
+
+  printSummary({
+    absolutePath,
+    args,
+    parsedNudgeCount: nudges.length,
+    insertedCount: rowsToInsert.length,
+    reconciledRowsTouched,
+    rowsToReconcile,
+    skippedMalformedJsonRows,
+  });
 };
 
 void main().catch((error: unknown) => {

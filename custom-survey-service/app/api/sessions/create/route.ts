@@ -22,6 +22,15 @@ import { getServiceClient } from "@/lib/db/server";
 import { hashToFloat } from "@/lib/hash";
 import type { NudgeRow } from "@/types/db";
 
+// The red-flag flow reuses the standard flow's display (bundle A/B, 4 nudges)
+// and only swaps the eligibility pool it samples from. Doctor remains the
+// single special-cased flow below.
+const ELIGIBILITY_COLUMN_BY_FLOW: Record<SessionFlow, string> = {
+  standard: "eligible_standard",
+  doctor: "eligible_doctor",
+  redflag: "eligible_redflag",
+};
+
 const bodySchema = z.object({
   email: z.email(),
   evaluatorId: z.string().min(3),
@@ -178,15 +187,7 @@ export const POST = async (request: Request) => {
   }
   const { evaluator, flow } = credentials;
   const isDoctorFlow = flow === "doctor";
-  // The red-flag flow reuses the standard flow's display (bundle A/B, 4 nudges)
-  // and only swaps the eligibility pool it samples from. Doctor remains the
-  // single special-cased flow below.
-  const eligibilityColumn =
-    flow === "doctor"
-      ? "eligible_doctor"
-      : flow === "redflag"
-        ? "eligible_redflag"
-        : "eligible_standard";
+  const eligibilityColumn = ELIGIBILITY_COLUMN_BY_FLOW[flow];
 
   const supabase = getServiceClient();
 

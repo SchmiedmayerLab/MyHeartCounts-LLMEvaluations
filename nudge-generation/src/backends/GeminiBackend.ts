@@ -64,11 +64,13 @@ export class GeminiBackend implements ModelBackend {
       clearTimeout(timeoutId);
       if (error instanceof Error) {
         if (error.name === "AbortError") {
-          throw new Error(`Request timeout after ${timeout / 1000} seconds`);
+          throw new Error(`Request timeout after ${timeout / 1000} seconds`, {
+            cause: error,
+          });
         }
         throw error;
       }
-      throw new Error(`Unknown error: ${String(error)}`);
+      throw new Error(`Unknown error: ${String(error)}`, { cause: error });
     }
   }
 
