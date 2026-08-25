@@ -13,7 +13,9 @@ import {
   type ModelConfig,
 } from "../../../nudge-generation/src/config/models.js";
 
-type JudgeModelConfig = ModelConfig & { provider: "openai" | "securegpt" };
+type JudgeModelConfig = ModelConfig & {
+  provider: "openai" | "securegpt" | "gemini";
+};
 
 export interface GenerateJsonParams {
   prompt: string;
@@ -25,22 +27,25 @@ export interface GenerateJsonParams {
 }
 
 const cleanJsonLikeText = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("```")) {
-    return trimmed;
+  let cleaned = value.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/, "")
+      .trim();
   }
-  return trimmed
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/, "")
-    .trim();
+  cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+  return cleaned;
 };
 
 export class JudgeModelClient {
   readonly modelConfig: JudgeModelConfig;
   readonly backend: ModelBackend;
+  private readonly defaultTemperature: number;
 
-  constructor(modelId: string) {
+  constructor(modelId: string, temperature?: number) {
+    this.defaultTemperature = temperature ?? 0.1;
     const modelConfig = MODEL_CONFIGS.find(
       (candidate) => candidate.id === modelId,
     );
@@ -49,21 +54,24 @@ export class JudgeModelClient {
     }
     if (
       modelConfig.provider !== "openai" &&
-      modelConfig.provider !== "securegpt"
+      modelConfig.provider !== "securegpt" &&
+      modelConfig.provider !== "gemini"
     ) {
       throw new Error(
-        `Model provider ${modelConfig.provider} is unsupported for llm-as-judge. Use openai or securegpt models.`,
+        `Model provider ${modelConfig.provider} is unsupported for llm-as-judge. Use openai, securegpt, or gemini models.`,
       );
     }
 
     const openAIApiKey = process.env.OPENAI_API_KEY;
     const secureGPTApiKey = process.env.SECUREGPT_API_KEY;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
     const judgeModelConfig = modelConfig as JudgeModelConfig;
     this.backend = BackendFactory.create(
       modelConfig,
       openAIApiKey,
       undefined,
       secureGPTApiKey,
+      geminiApiKey,
     );
     this.modelConfig = judgeModelConfig;
   }
@@ -76,7 +84,7 @@ export class JudgeModelClient {
 
     const raw = await this.backend.generate(params.prompt, {
       maxTokens: params.maxTokens ?? 1600,
-      temperature: params.temperature ?? 0.1,
+      temperature: params.temperature ?? this.defaultTemperature,
       timeout: timeoutMs,
       response_format: {
         type: "json_schema",

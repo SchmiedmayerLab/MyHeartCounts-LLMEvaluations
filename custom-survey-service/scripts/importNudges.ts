@@ -30,6 +30,7 @@ interface CsvRow {
   notificationTimeContext?: string;
   llmResponse?: string;
   sampledNudgeJson?: string;
+  nudgeJson?: string;
 }
 
 interface Nudge {
@@ -38,7 +39,78 @@ interface Nudge {
   source_model: string | null;
   dedupe_key: string;
   metadata_json: Record<string, unknown>;
+  active: boolean;
+  eligible_standard: boolean;
+  eligible_doctor: boolean;
+  eligible_redflag: boolean;
 }
+
+interface ParsedArgs {
+  csvPath: string;
+  eligibleStandard: boolean;
+  eligibleDoctor: boolean;
+  eligibleRedflag: boolean;
+}
+
+const parseBooleanFlag = (raw: string, flagName: string): boolean => {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  throw new Error(
+    `Invalid value for --${flagName}: "${raw}". Expected true|false.`,
+  );
+};
+
+const parseArgs = (): ParsedArgs => {
+  // Defaults preserve the historical behavior of this importer: standard-only
+  // unless the caller opts the new rows into the doctor and/or red-flag pools.
+  let eligibleStandard = true;
+  let eligibleDoctor = false;
+  let eligibleRedflag = false;
+  const positional: string[] = [];
+
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith("--eligible-standard=")) {
+      eligibleStandard = parseBooleanFlag(
+        arg.slice("--eligible-standard=".length),
+        "eligible-standard",
+      );
+    } else if (arg.startsWith("--eligible-doctor=")) {
+      eligibleDoctor = parseBooleanFlag(
+        arg.slice("--eligible-doctor=".length),
+        "eligible-doctor",
+      );
+    } else if (arg.startsWith("--eligible-redflag=")) {
+      eligibleRedflag = parseBooleanFlag(
+        arg.slice("--eligible-redflag=".length),
+        "eligible-redflag",
+      );
+    } else if (arg.startsWith("--")) {
+      throw new Error(`Unknown flag: ${arg}`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  if (positional.length !== 1) {
+    throw new Error(
+      "Usage: npm run import:nudges -- <csv-file-path> [--eligible-standard=true|false] [--eligible-doctor=true|false] [--eligible-redflag=true|false]",
+    );
+  }
+
+  if (!eligibleStandard && !eligibleDoctor && !eligibleRedflag) {
+    throw new Error(
+      "Refusing to import nudges with --eligible-standard=false, --eligible-doctor=false, and --eligible-redflag=false; the rows would never be selectable.",
+    );
+  }
+
+  return {
+    csvPath: positional[0],
+    eligibleStandard,
+    eligibleDoctor,
+    eligibleRedflag,
+  };
+};
 
 const parseResponse = (raw: string): Array<{ title: string; body: string }> => {
   const parsed = JSON.parse(raw) as unknown;
@@ -60,9 +132,11 @@ const parseResponse = (raw: string): Array<{ title: string; body: string }> => {
   return [];
 };
 
+type NudgeJsonColumn = "llmResponse" | "sampledNudgeJson" | "nudgeJson";
+
 const getRawResponse = (
   row: CsvRow,
-): { raw: string; sourceColumn: "llmResponse" | "sampledNudgeJson" } | null => {
+): { raw: string; sourceColumn: NudgeJsonColumn } | null => {
   const llmResponse = row.llmResponse?.trim();
   if (llmResponse) {
     return { raw: llmResponse, sourceColumn: "llmResponse" };
@@ -70,6 +144,10 @@ const getRawResponse = (
   const sampledNudgeJson = row.sampledNudgeJson?.trim();
   if (sampledNudgeJson) {
     return { raw: sampledNudgeJson, sourceColumn: "sampledNudgeJson" };
+  }
+  const nudgeJson = row.nudgeJson?.trim();
+  if (nudgeJson) {
+    return { raw: nudgeJson, sourceColumn: "nudgeJson" };
   }
   return null;
 };
@@ -106,25 +184,72 @@ const buildMetadataJson = (row: CsvRow): Record<string, unknown> => {
   };
 };
 
-const main = async () => {
-  const filePath = process.argv[2];
-  if (!filePath) {
-    throw new Error("Usage: npm run import:nudges -- <csv-file-path>");
+interface ExistingNudgeRow {
+  id: string;
+  title: string;
+  body: string;
+  dedupe_key: string;
+  eligible_standard: boolean;
+  eligible_doctor: boolean;
+  eligible_redflag: boolean;
+  active: boolean;
+}
+
+interface ReconcileItem {
+  existingId: string;
+  existingTitle: string;
+  matchedBy: "dedupe_key" | "content";
+  currentEligibleStandard: boolean;
+  currentEligibleDoctor: boolean;
+  currentEligibleRedflag: boolean;
+}
+
+const createServiceClient = (url: string, serviceRoleKey: string) =>
+  createClient(url, serviceRoleKey, { auth: { persistSession: false } });
+
+// Derived from the factory above so helpers share the exact client type that
+// `createClient` infers; `ReturnType<typeof createClient>` resolves its
+// generics to `never` and does not match.
+type ServiceClient = ReturnType<typeof createServiceClient>;
+
+const contentKey = (title: string, body: string): string =>
+  `${title}\u0000${body}`;
+
+const nudgesFromRow = (
+  row: CsvRow,
+  args: ParsedArgs,
+  parsedNudges: Array<{ title: string; body: string }>,
+): Nudge[] => {
+  const metadataJson = buildMetadataJson(row);
+  const metadataFingerprint = JSON.stringify(metadataJson);
+  const collected: Nudge[] = [];
+  for (const nudge of parsedNudges) {
+    const title = nudge.title.trim();
+    const body = nudge.body.trim();
+    if (!title || !body) {
+      continue;
+    }
+    collected.push({
+      title,
+      body,
+      source_model: row.modelId ?? null,
+      dedupe_key: stableHash(
+        `${title}::${body}::${row.modelId ?? ""}::${metadataFingerprint}`,
+      ),
+      metadata_json: metadataJson,
+      active: true,
+      eligible_standard: args.eligibleStandard,
+      eligible_doctor: args.eligibleDoctor,
+      eligible_redflag: args.eligibleRedflag,
+    });
   }
+  return collected;
+};
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
-  }
-
-  const absolutePath = path.resolve(filePath);
-  const content = await fs.readFile(absolutePath, "utf-8");
-  const rows: CsvRow[] = parse(content, {
-    columns: true,
-    skip_empty_lines: true,
-  });
-
+const collectNudges = (
+  rows: CsvRow[],
+  args: ParsedArgs,
+): { nudges: Nudge[]; skippedMalformedJsonRows: number } => {
   const nudges: Nudge[] = [];
   let skippedMalformedJsonRows = 0;
   for (const [index, row] of rows.entries()) {
@@ -143,43 +268,218 @@ const main = async () => {
       );
       continue;
     }
-    const metadataJson = buildMetadataJson(row);
-    const metadataFingerprint = JSON.stringify(metadataJson);
-    for (const nudge of parsedNudges) {
-      const title = nudge.title.trim();
-      const body = nudge.body.trim();
-      if (!title || !body) {
-        continue;
-      }
-      nudges.push({
-        title,
-        body,
-        source_model: row.modelId ?? null,
-        dedupe_key: stableHash(
-          `${title}::${body}::${row.modelId ?? ""}::${metadataFingerprint}`,
-        ),
-        metadata_json: metadataJson,
-      });
+    nudges.push(...nudgesFromRow(row, args, parsedNudges));
+  }
+  return { nudges, skippedMalformedJsonRows };
+};
+
+// Partition CSV nudges into:
+//   - rowsToInsert: no DB match by dedupe_key OR by (title, body). Pure
+//     new rows, inserted with the requested eligibility flags as-is.
+//   - rowsToReconcile: a DB match exists (either by dedupe_key, or by
+//     content under different metadata). We never insert these. We only
+//     UPDATE the eligibility flags using OR semantics so re-running with
+//     a narrower flag set (for example --eligible-standard=false during a
+//     doctor-flow import) never demotes a row that was already in the
+//     standard pool.
+const partitionNudges = (
+  nudges: Nudge[],
+  existingRows: ExistingNudgeRow[],
+): { rowsToInsert: Nudge[]; rowsToReconcile: ReconcileItem[] } => {
+  const existingByDedupeKey = new Map<string, ExistingNudgeRow>();
+  const existingByContent = new Map<string, ExistingNudgeRow>();
+  for (const row of existingRows) {
+    existingByDedupeKey.set(row.dedupe_key, row);
+    existingByContent.set(contentKey(row.title, row.body), row);
+  }
+
+  const rowsToInsert: Nudge[] = [];
+  const rowsToReconcile: ReconcileItem[] = [];
+  const seenExistingIds = new Set<string>();
+
+  for (const csvNudge of nudges) {
+    const dedupeMatch = existingByDedupeKey.get(csvNudge.dedupe_key);
+    const contentMatch = existingByContent.get(
+      contentKey(csvNudge.title, csvNudge.body),
+    );
+    const match = dedupeMatch ?? contentMatch;
+    if (!match) {
+      rowsToInsert.push(csvNudge);
+      continue;
+    }
+    if (seenExistingIds.has(match.id)) {
+      // Another CSV row already mapped to this DB row; skip duplicate work.
+      continue;
+    }
+    seenExistingIds.add(match.id);
+    rowsToReconcile.push({
+      existingId: match.id,
+      existingTitle: match.title,
+      matchedBy: dedupeMatch ? "dedupe_key" : "content",
+      currentEligibleStandard: match.eligible_standard,
+      currentEligibleDoctor: match.eligible_doctor,
+      currentEligibleRedflag: match.eligible_redflag,
+    });
+  }
+
+  return { rowsToInsert, rowsToReconcile };
+};
+
+// Reconcile existing-row matches with OR'd eligibility flags. Returns the
+// number of rows actually updated; rows whose flags are already correct are
+// left untouched.
+const reconcileEligibility = async (
+  supabase: ServiceClient,
+  rowsToReconcile: ReconcileItem[],
+  args: ParsedArgs,
+): Promise<number> => {
+  let reconciledRowsTouched = 0;
+  for (const reconcile of rowsToReconcile) {
+    const nextStandard =
+      reconcile.currentEligibleStandard || args.eligibleStandard;
+    const nextDoctor = reconcile.currentEligibleDoctor || args.eligibleDoctor;
+    const nextRedflag =
+      reconcile.currentEligibleRedflag || args.eligibleRedflag;
+    if (
+      nextStandard === reconcile.currentEligibleStandard &&
+      nextDoctor === reconcile.currentEligibleDoctor &&
+      nextRedflag === reconcile.currentEligibleRedflag
+    ) {
+      continue;
+    }
+    const { error: updateError } = await supabase
+      .from("nudges")
+      .update({
+        eligible_standard: nextStandard,
+        eligible_doctor: nextDoctor,
+        eligible_redflag: nextRedflag,
+      })
+      .eq("id", reconcile.existingId);
+    if (updateError) {
+      throw updateError;
+    }
+    reconciledRowsTouched += 1;
+  }
+  return reconciledRowsTouched;
+};
+
+const printSummary = (summary: {
+  absolutePath: string;
+  args: ParsedArgs;
+  parsedNudgeCount: number;
+  insertedCount: number;
+  reconciledRowsTouched: number;
+  rowsToReconcile: ReconcileItem[];
+  skippedMalformedJsonRows: number;
+}): void => {
+  const { args, rowsToReconcile } = summary;
+  const matchedByDedupe = rowsToReconcile.filter(
+    (r) => r.matchedBy === "dedupe_key",
+  ).length;
+  const matchedByContent = rowsToReconcile.filter(
+    (r) => r.matchedBy === "content",
+  ).length;
+
+  console.log(`Imported from ${summary.absolutePath}`);
+  console.log(`  CSV nudges parsed: ${summary.parsedNudgeCount}`);
+  console.log(`  Inserted as new: ${summary.insertedCount}`);
+  console.log(
+    `  Existing matches reconciled (OR'd flags): ${summary.reconciledRowsTouched} of ${rowsToReconcile.length}`,
+  );
+  console.log(
+    `    by dedupe_key (same content + metadata): ${matchedByDedupe}`,
+  );
+  console.log(
+    `    by (title, body) only (different metadata): ${matchedByContent}`,
+  );
+  console.log(
+    `  Eligibility requested for new rows: standard=${args.eligibleStandard}, doctor=${args.eligibleDoctor}, redflag=${args.eligibleRedflag}`,
+  );
+  if (rowsToReconcile.length > 0) {
+    console.log("  Reconciled rows:");
+    for (const reconcile of rowsToReconcile) {
+      console.log(
+        `    - [${reconcile.matchedBy}] ${reconcile.existingId} ${JSON.stringify(reconcile.existingTitle)}`,
+      );
+    }
+  }
+  if (summary.skippedMalformedJsonRows > 0) {
+    console.log(
+      `  Skipped ${summary.skippedMalformedJsonRows} CSV row(s) due to malformed JSON.`,
+    );
+  }
+};
+
+const main = async () => {
+  const args = parseArgs();
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
+  const absolutePath = path.resolve(args.csvPath);
+  const content = await fs.readFile(absolutePath, "utf-8");
+  const rows: CsvRow[] = parse(content, {
+    columns: true,
+    skip_empty_lines: true,
+  });
+
+  const { nudges, skippedMalformedJsonRows } = collectNudges(rows, args);
+
+  const supabase = createServiceClient(supabaseUrl, supabaseServiceRoleKey);
+
+  // Pre-fetch existing rows for two reasons:
+  // 1. Reconcile-by-content: a CSV nudge whose (title, body) matches a row
+  //    in the DB but has different metadata/model would otherwise be inserted
+  //    as a duplicate. We want to *flip eligibility flags* on the existing
+  //    row instead of inserting a near-duplicate, and we want to OR flags so
+  //    that re-running with --eligible-doctor=true never demotes an existing
+  //    standard nudge.
+  // 2. Reporting: print a clear summary of new vs. matched-by-content rows.
+  const { data: existingRowsRaw, error: existingFetchError } = await supabase
+    .from("nudges")
+    .select(
+      "id, title, body, dedupe_key, eligible_standard, eligible_doctor, eligible_redflag, active",
+    );
+  if (existingFetchError) {
+    throw existingFetchError;
+  }
+
+  const { rowsToInsert, rowsToReconcile } = partitionNudges(
+    nudges,
+    existingRowsRaw,
+  );
+
+  // Step 1: insert pure-new rows. We use a plain insert (no upsert) because
+  // partitioning above guarantees there is no existing row with the same
+  // dedupe_key.
+  if (rowsToInsert.length > 0) {
+    const { error: insertError } = await supabase
+      .from("nudges")
+      .insert(rowsToInsert);
+    if (insertError) {
+      throw insertError;
     }
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false },
-  });
+  // Step 2: reconcile existing-row matches with OR'd eligibility flags.
+  const reconciledRowsTouched = await reconcileEligibility(
+    supabase,
+    rowsToReconcile,
+    args,
+  );
 
-  const { error } = await supabase.from("nudges").upsert(nudges, {
-    onConflict: "dedupe_key",
+  printSummary({
+    absolutePath,
+    args,
+    parsedNudgeCount: nudges.length,
+    insertedCount: rowsToInsert.length,
+    reconciledRowsTouched,
+    rowsToReconcile,
+    skippedMalformedJsonRows,
   });
-  if (error) {
-    throw error;
-  }
-
-  console.log(`Imported ${nudges.length} nudge rows from ${absolutePath}`);
-  if (skippedMalformedJsonRows > 0) {
-    console.log(
-      `Skipped ${skippedMalformedJsonRows} row(s) due to malformed JSON.`,
-    );
-  }
 };
 
 void main().catch((error: unknown) => {

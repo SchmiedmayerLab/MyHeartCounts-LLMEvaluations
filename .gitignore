@@ -147,14 +147,10 @@ dist
 # Python bytecode
 __pycache__/
 
-# CSV files
 *.csv
-
-# Generated and evaluated data files
-data/
-
-# Jupyter notebooks
 *.ipynb
-
-# Analysis temp files
+data/
 analysis_temp/
+plots/
+reports/
+manuscript/

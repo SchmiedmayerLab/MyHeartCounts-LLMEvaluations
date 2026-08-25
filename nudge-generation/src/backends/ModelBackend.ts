@@ -14,7 +14,7 @@ export interface GenerateOptions {
   [key: string]: unknown;
 }
 
-export type ModelProvider = "openai" | "huggingface" | "securegpt";
+export type ModelProvider = "openai" | "huggingface" | "securegpt" | "gemini";
 
 export interface ModelBackend {
   readonly modelId: string;

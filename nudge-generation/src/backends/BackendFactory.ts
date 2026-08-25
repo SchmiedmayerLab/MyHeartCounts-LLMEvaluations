@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: MIT
 //
 
+import { GeminiBackend } from "./GeminiBackend.js";
 import { HuggingFacePythonBackend } from "./HuggingFacePythonBackend.js";
 import { type ModelBackend } from "./ModelBackend.js";
 import { OpenAIBackend } from "./OpenAIBackend.js";
@@ -17,6 +18,7 @@ const createBackend = (
   openAIApiKey?: string,
   pythonServiceUrl?: string,
   secureGPTApiKey?: string,
+  geminiApiKey?: string,
 ): ModelBackend => {
   switch (config.provider) {
     case "openai":
@@ -31,6 +33,11 @@ const createBackend = (
         throw new Error("SecureGPT API key is required for SecureGPT models");
       }
       return new SecureGPTBackend(config, secureGPTApiKey);
+    case "gemini":
+      if (!geminiApiKey) {
+        throw new Error("Gemini API key is required for Gemini models");
+      }
+      return new GeminiBackend(config, geminiApiKey);
     default: {
       const _exhaustive: never = config.provider;
       throw new Error(`Unsupported provider: ${String(_exhaustive)}`);

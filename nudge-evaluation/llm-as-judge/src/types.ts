@@ -53,7 +53,7 @@ export interface JudgeRunOutput {
   run: {
     strategy: JudgeStrategy;
     modelId: string;
-    provider: "openai" | "securegpt";
+    provider: "openai" | "securegpt" | "gemini";
     createdAt: string;
     promptVersion: string;
   };
