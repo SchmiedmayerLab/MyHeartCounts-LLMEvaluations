@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -247,11 +247,13 @@ export class SecureGPTBackend implements ModelBackend {
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === "AbortError" || error.name === "TimeoutError") {
-          throw new Error(`Request timeout after ${timeout / 1000} seconds`);
+          throw new Error(`Request timeout after ${timeout / 1000} seconds`, {
+            cause: error,
+          });
         }
         throw error;
       }
-      throw new Error(`Unknown error: ${String(error)}`);
+      throw new Error(`Unknown error: ${String(error)}`, { cause: error });
     }
   }
 
@@ -463,8 +465,46 @@ export class SecureGPTBackend implements ModelBackend {
     return text
       .replace(/^```json\s*/i, "") // Remove ```json at start
       .replace(/^```\s*/i, "") // Remove ``` at start (if json wasn't there)
-      .replace(/\s*```$/i, "") // Remove ``` at end
+      .replace(/```$/, "") // Remove ``` at end
       .trim();
+  }
+
+  private extractGeminiElementText(element: GeminiResponse | string): string {
+    if (typeof element === "string") {
+      return element;
+    }
+    return (
+      element.candidates?.[0]?.content?.parts?.[0]?.text ??
+      element.content?.parts?.[0]?.text ??
+      ""
+    );
+  }
+
+  private extractGeminiText(data: unknown): string {
+    const geminiData = data as
+      GeminiResponse | GeminiResponse[] | Record<string, unknown>;
+
+    // Gemini may split a response across array elements, so concatenate them
+    if (Array.isArray(geminiData)) {
+      return geminiData
+        .map((element) =>
+          this.extractGeminiElementText(element as GeminiResponse | string),
+        )
+        .join("");
+    }
+
+    // Some responses arrive wrapped in a numeric key, e.g. {"0": {...}}
+    const recordData = geminiData as Record<string, unknown>;
+    if ("0" in recordData) {
+      return this.extractGeminiElementText(
+        recordData["0"] as GeminiResponse | string,
+      );
+    }
+
+    return (
+      (geminiData as GeminiResponse).candidates?.[0]?.content?.parts?.[0]
+        ?.text ?? ""
+    );
   }
 
   private extractResponse(data: unknown, modelType: string): string {
@@ -475,58 +515,7 @@ export class SecureGPTBackend implements ModelBackend {
         return this.cleanJsonResponse(content);
       }
       case "gemini": {
-        // Handle different response structures
-        let extracted = "";
-
-        // Standard Gemini API format: data.candidates[0].content.parts[0].text
-        const geminiData = data as
-          | GeminiResponse
-          | GeminiResponse[]
-          | Record<string, unknown>;
-
-        if (Array.isArray(geminiData) && geminiData.length > 0) {
-          // Handle array response (if API returns array directly)
-          // Gemini may split responses across multiple array elements, so we need to concatenate them
-          const textParts: string[] = [];
-          for (const element of geminiData) {
-            const elem = element as GeminiResponse | string;
-            if (typeof elem === "object") {
-              const geminiElem = elem;
-              if (geminiElem.candidates?.[0]?.content?.parts?.[0]?.text) {
-                textParts.push(geminiElem.candidates[0].content.parts[0].text);
-              } else if (geminiElem.content?.parts?.[0]?.text) {
-                textParts.push(geminiElem.content.parts[0].text);
-              }
-            } else if (typeof elem === "string") {
-              textParts.push(elem);
-            }
-          }
-          extracted = textParts.join("");
-        } else if (typeof geminiData === "object") {
-          // Handle object with numeric key (e.g., {"0": {...}})
-          const recordData = geminiData as Record<string, unknown>;
-          if ("0" in recordData) {
-            const element = recordData["0"] as GeminiResponse | string;
-            if (typeof element === "object") {
-              const geminiElem = element;
-              if (geminiElem.candidates?.[0]?.content?.parts?.[0]?.text) {
-                extracted = geminiElem.candidates[0].content.parts[0].text;
-              } else if (geminiElem.content?.parts?.[0]?.text) {
-                extracted = geminiElem.content.parts[0].text;
-              }
-            } else if (typeof element === "string") {
-              extracted = element;
-            }
-          } else {
-            // Standard Gemini API format
-            const standardGemini = geminiData as GeminiResponse;
-            if (standardGemini.candidates?.[0]?.content?.parts?.[0]?.text) {
-              extracted = standardGemini.candidates[0].content.parts[0].text;
-            }
-          }
-        }
-
-        return this.cleanJsonResponse(extracted);
+        return this.cleanJsonResponse(this.extractGeminiText(data));
       }
       case "llama": {
         const llamaData = data as LlamaResponse;

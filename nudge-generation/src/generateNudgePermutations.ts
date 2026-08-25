@@ -1,11 +1,12 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
 // SPDX-License-Identifier: MIT
 //
 
+import { randomInt } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -276,24 +277,50 @@ class NudgePermutationTester {
       for (const ageGroup of ageOptions) {
         for (const disease of diseaseOptions) {
           for (const stageOfChange of stageOptions) {
-            for (const educationLevel of educationOptions) {
-              for (const language of languageOptions) {
-                for (const preferredWorkoutTypes of workoutTypeOptions) {
-                  for (const preferredNotificationTime of notificationTimeOptions) {
-                    permutations.push({
-                      genderIdentity,
-                      ageGroup,
-                      disease: disease as Disease | null,
-                      stageOfChange: stageOfChange as StageOfChange | null,
-                      educationLevel: educationLevel as EducationLevel,
-                      language,
-                      preferredWorkoutTypes,
-                      preferredNotificationTime,
-                    });
-                  }
-                }
-              }
-            }
+            permutations.push(
+              ...this.expandPreferences(
+                { genderIdentity, ageGroup, disease, stageOfChange },
+                {
+                  educationOptions,
+                  languageOptions,
+                  workoutTypeOptions,
+                  notificationTimeOptions,
+                },
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    return permutations;
+  }
+
+  private expandPreferences(
+    participant: Pick<
+      TestContext,
+      "genderIdentity" | "ageGroup" | "disease" | "stageOfChange"
+    >,
+    options: {
+      educationOptions: EducationLevel[];
+      languageOptions: string[];
+      workoutTypeOptions: string[];
+      notificationTimeOptions: string[];
+    },
+  ): TestContext[] {
+    const permutations: TestContext[] = [];
+
+    for (const educationLevel of options.educationOptions) {
+      for (const language of options.languageOptions) {
+        for (const preferredWorkoutTypes of options.workoutTypeOptions) {
+          for (const preferredNotificationTime of options.notificationTimeOptions) {
+            permutations.push({
+              ...participant,
+              educationLevel,
+              language,
+              preferredWorkoutTypes,
+              preferredNotificationTime,
+            });
           }
         }
       }
@@ -382,7 +409,7 @@ class NudgePermutationTester {
   private shuffleArray<T>(array: T[]): T[] {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = randomInt(i + 1);
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     return shuffled;
@@ -409,6 +436,80 @@ class NudgePermutationTester {
     this.modelsToTest = models;
   }
 
+  private async prepareModelsForRun(): Promise<void> {
+    if (this.modelsToTest.length === 0) {
+      throw new Error(
+        "No models configured for testing. Use --model, --models, or --provider to select models.",
+      );
+    }
+
+    const hasHuggingFaceModels = this.modelsToTest.some(
+      (m) => m.provider === "huggingface",
+    );
+    if (!hasHuggingFaceModels) {
+      return;
+    }
+
+    if (await this.checkPythonServiceHealth()) {
+      return;
+    }
+
+    console.warn(
+      `Warning: Python service at ${this.pythonServiceUrl} is not available. Hugging Face provider models will be skipped.`,
+    );
+    this.modelsToTest = this.modelsToTest.filter(
+      (m) => m.provider !== "huggingface",
+    );
+    if (this.modelsToTest.length === 0) {
+      throw new Error(
+        "No models available for testing. Python service is required for huggingface-provider models.",
+      );
+    }
+  }
+
+  private selectPermutations(
+    allPermutations: TestContext[],
+    maxPermutations: number | undefined,
+    randomize: boolean,
+  ): TestContext[] {
+    if (!maxPermutations) {
+      return allPermutations;
+    }
+    const candidates =
+      randomize ? this.shuffleArray(allPermutations) : allPermutations;
+    return candidates.slice(0, maxPermutations);
+  }
+
+  private buildModelIdsLabel(): string {
+    if (this.modelsToTest.length === 1) {
+      return this.modelsToTest[0].id.replace(/\//g, "-");
+    }
+    if (this.modelsToTest.length <= 3) {
+      return this.modelsToTest.map((m) => m.id.split("/").pop()).join("_");
+    }
+    const providers = [...new Set(this.modelsToTest.map((m) => m.provider))];
+    return providers.length === 1 ?
+        `${providers[0]}_${this.modelsToTest.length}models`
+      : `multi-provider_${this.modelsToTest.length}models`;
+  }
+
+  private buildFilenameSuffix(options: {
+    fromProvidedContexts: boolean;
+    maxPermutations?: number;
+    randomize: boolean;
+    requireStageOfChange: boolean;
+    requireComorbidity: boolean;
+  }): string {
+    if (options.fromProvidedContexts) {
+      return "_from-json";
+    }
+    const requirements = `${options.requireStageOfChange ? "_require-stage" : ""}${options.requireComorbidity ? "_require-comorbidity" : ""}`;
+    if (options.maxPermutations) {
+      return `_sample_${options.maxPermutations}${options.randomize ? "_random" : ""}${requirements}`;
+    }
+    return `_full${requirements}`;
+  }
+
   async runAllPermutations(
     maxPermutations?: number,
     randomize = false,
@@ -417,50 +518,17 @@ class NudgePermutationTester {
     requireComorbidity = false,
     providedContexts?: TestContext[],
   ): Promise<void> {
-    if (this.modelsToTest.length === 0) {
-      throw new Error(
-        "No models configured for testing. Use --model, --models, or --provider to select models.",
-      );
-    }
-
-    // Check Python service health if Hugging Face provider models are being tested
-    const hasHuggingFaceModels = this.modelsToTest.some(
-      (m) => m.provider === "huggingface",
-    );
-    if (hasHuggingFaceModels) {
-      const isHealthy = await this.checkPythonServiceHealth();
-      if (!isHealthy) {
-        console.warn(
-          `Warning: Python service at ${this.pythonServiceUrl} is not available. Hugging Face provider models will be skipped.`,
-        );
-        this.modelsToTest = this.modelsToTest.filter(
-          (m) => m.provider !== "huggingface",
-        );
-        if (this.modelsToTest.length === 0) {
-          throw new Error(
-            "No models available for testing. Python service is required for huggingface-provider models.",
-          );
-        }
-      }
-    }
+    await this.prepareModelsForRun();
 
     const allPermutations =
       providedContexts ??
       this.generateAllPermutations(requireStageOfChange, requireComorbidity);
 
-    let permutationsToTest: TestContext[] = allPermutations;
-    if (!providedContexts && maxPermutations) {
-      if (randomize) {
-        permutationsToTest = this.shuffleArray(allPermutations).slice(
-          0,
-          maxPermutations,
-        );
-      } else {
-        permutationsToTest = allPermutations.slice(0, maxPermutations);
-      }
-    } else {
-      permutationsToTest = allPermutations;
-    }
+    const permutationsToTest = this.selectPermutations(
+      allPermutations,
+      providedContexts === undefined ? maxPermutations : undefined,
+      randomize,
+    );
 
     console.log(
       `${providedContexts ? "Loaded" : "Generated"} ${allPermutations.length} total ${providedContexts ? "contexts" : "permutations"}`,
@@ -514,39 +582,23 @@ class NudgePermutationTester {
       }
     }
 
-    // Generate filename
-    let modelIds: string;
-    if (this.modelsToTest.length === 1) {
-      // Single model: use full model ID
-      modelIds = this.modelsToTest[0].id.replace(/\//g, "-");
-    } else if (this.modelsToTest.length <= 3) {
-      // 2-3 models: use shortened model IDs
-      modelIds = this.modelsToTest.map((m) => m.id.split("/").pop()).join("_");
-    } else {
-      // 4+ models: use provider and count to keep filename short
-      const providers = [...new Set(this.modelsToTest.map((m) => m.provider))];
-      if (providers.length === 1) {
-        modelIds = `${providers[0]}_${this.modelsToTest.length}models`;
-      } else {
-        modelIds = `multi-provider_${this.modelsToTest.length}models`;
-      }
-    }
-
-    const suffix =
-      providedContexts ? "_from-json"
-      : maxPermutations ?
-        `_sample_${maxPermutations}${randomize ? "_random" : ""}${requireStageOfChange ? "_require-stage" : ""}${requireComorbidity ? "_require-comorbidity" : ""}`
-      : `_full${requireStageOfChange ? "_require-stage" : ""}${requireComorbidity ? "_require-comorbidity" : ""}`;
+    const modelIds = this.buildModelIdsLabel();
+    const suffix = this.buildFilenameSuffix({
+      fromProvidedContexts: providedContexts !== undefined,
+      maxPermutations,
+      randomize,
+      requireStageOfChange,
+      requireComorbidity,
+    });
 
     // Use provided output directory or fall back to default (two levels up from dist/)
-    let dataDir: string;
-    if (outputDir) {
-      dataDir = path.resolve(outputDir);
-    } else {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-      dataDir = path.join(__dirname, "../../data/generated");
-    }
+    const dataDir =
+      outputDir ?
+        path.resolve(outputDir)
+      : path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../data/generated",
+        );
 
     fs.mkdirSync(dataDir, { recursive: true });
     const outputPath = path.join(

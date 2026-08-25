@@ -1,5 +1,5 @@
 #
-# This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+# This source file is part of the My Heart Counts LLM Evaluations open-source project
 #
 # SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 #
@@ -18,22 +18,18 @@ on:
   workflow_call:
 
 jobs:
-  reuseaction:
-    name: REUSE Compliance Check
-    uses: StanfordBDHG/.github/.github/workflows/reuse.yml@v2
-  markdownlinkcheck:
-    name: Markdown Link Check
-    uses: StanfordBDHG/.github/.github/workflows/markdown-link-check.yml@v2
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@v4
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
-          node-version: 22.6.x
+          node-version: 24.x
       - name: Install Dependencies
         run: npm run install
       - name: Build
@@ -41,9 +37,9 @@ jobs:
       - name: Lint Typescript files with ESLint
         run: npm run lint:strict
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.13'
       - name: Install Python dependencies
         run: |
           pip install -r nudge-generation/python_service/requirements.txt
@@ -52,6 +48,3 @@ jobs:
         run: pip install pyrefly
       - name: Lint Python files with Pyrefly
         run: pyrefly check
-    permissions:
-      contents: read
-  

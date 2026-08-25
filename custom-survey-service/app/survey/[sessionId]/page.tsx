@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -172,15 +172,70 @@ const metadataForQuestion = (
   return rows;
 };
 
+const NudgeScoreRow = ({
+  question,
+  nudge,
+  scores,
+  onSelectScore,
+}: Readonly<{
+  question: Question;
+  nudge: Nudge;
+  scores: ScoreMap;
+  onSelectScore: (key: string, scoreValue: number) => void;
+}>) => (
+  <tr>
+    <td className="nudge-cell">
+      <strong>{nudge.title}</strong>
+      <div>{nudge.body}</div>
+      <div className="nudge-metadata">
+        {metadataForQuestion(question, nudge).map((entry) => (
+          <span
+            key={`${question.id}:${nudge.id}:${entry.label}`}
+            className="metadata-pill"
+          >
+            {entry.label}: {entry.value}
+          </span>
+        ))}
+      </div>
+    </td>
+    {(question.response_type === "yes_no" ? [1, 7] : [1, 2, 3, 4, 5, 6, 7]).map(
+      (scoreValue) => {
+        const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
+
+        return (
+          <td key={scoreValue} className="matrix-score-cell">
+            <label htmlFor={inputId} className="matrix-score-hit-area">
+              <input
+                id={inputId}
+                className="matrix-score-radio"
+                type="radio"
+                name={keyFor(question.id, nudge.id)}
+                checked={scores[keyFor(question.id, nudge.id)] === scoreValue}
+                onChange={() => {
+                  onSelectScore(keyFor(question.id, nudge.id), scoreValue);
+                }}
+              />
+            </label>
+          </td>
+        );
+      },
+    )}
+  </tr>
+);
+
 export default function SurveyPage({
   params,
-}: {
+}: Readonly<{
   params: Promise<{ sessionId: string }>;
-}) {
+}>) {
   const router = useRouter();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [scores, setScores] = useState<ScoreMap>({});
+
+  const setScore = (key: string, scoreValue: number) => {
+    setScores((current) => ({ ...current, [key]: scoreValue }));
+  };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -347,54 +402,13 @@ export default function SurveyPage({
             </thead>
             <tbody>
               {session.nudges.map((nudge) => (
-                <tr key={nudge.id}>
-                  <td className="nudge-cell">
-                    <strong>{nudge.title}</strong>
-                    <div>{nudge.body}</div>
-                    <div className="nudge-metadata">
-                      {metadataForQuestion(question, nudge).map((entry) => (
-                        <span
-                          key={`${question.id}:${nudge.id}:${entry.label}`}
-                          className="metadata-pill"
-                        >
-                          {entry.label}: {entry.value}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  {(question.response_type === "yes_no"
-                    ? [1, 7]
-                    : [1, 2, 3, 4, 5, 6, 7]
-                  ).map((scoreValue) => {
-                    const inputId = `score-${question.id}-${nudge.id}-${scoreValue}`;
-
-                    return (
-                      <td key={scoreValue} className="matrix-score-cell">
-                        <label
-                          htmlFor={inputId}
-                          className="matrix-score-hit-area"
-                        >
-                          <input
-                            id={inputId}
-                            className="matrix-score-radio"
-                            type="radio"
-                            name={keyFor(question.id, nudge.id)}
-                            checked={
-                              scores[keyFor(question.id, nudge.id)] ===
-                              scoreValue
-                            }
-                            onChange={() =>
-                              setScores((current) => ({
-                                ...current,
-                                [keyFor(question.id, nudge.id)]: scoreValue,
-                              }))
-                            }
-                          />
-                        </label>
-                      </td>
-                    );
-                  })}
-                </tr>
+                <NudgeScoreRow
+                  key={nudge.id}
+                  question={question}
+                  nudge={nudge}
+                  scores={scores}
+                  onSelectScore={setScore}
+                />
               ))}
             </tbody>
           </table>
@@ -403,7 +417,12 @@ export default function SurveyPage({
 
       <div className="card">
         {error ? <p className="error">{error}</p> : null}
-        <button className="button" onClick={submit} disabled={submitting}>
+        <button
+          type="button"
+          className="button"
+          onClick={submit}
+          disabled={submitting}
+        >
           {submitting ? "Submitting..." : "Submit responses"}
         </button>
       </div>

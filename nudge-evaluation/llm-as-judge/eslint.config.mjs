@@ -1,0 +1,16 @@
+//
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
+//
+// SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+//
+// SPDX-License-Identifier: MIT
+//
+
+import { getEslintNodeConfig } from "@schmiedmayerlab/grove-configurations";
+
+export default [
+  ...getEslintNodeConfig({ tsconfigRootDir: import.meta.dirname }),
+  {
+    ignores: ["node_modules/**/*", "analysis_temp/**/*"],
+  },
+];

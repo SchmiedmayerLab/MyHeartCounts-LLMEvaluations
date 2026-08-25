@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -21,6 +21,7 @@ import {
   type JudgeRunOutput,
   type JudgeStrategy,
   type NudgeInput,
+  type SurveyQuestion,
 } from "./types.js";
 
 interface CliArgs {
@@ -172,6 +173,21 @@ const parseNudgeInput = async (args: CliArgs): Promise<NudgeInput> => {
   };
 };
 
+const evaluateWithStrategy = async (
+  strategy: JudgeStrategy,
+  modelClient: JudgeModelClient,
+  nudge: NudgeInput,
+  questions: SurveyQuestion[],
+) => {
+  if (strategy === "single") {
+    return evaluateSingle(modelClient, nudge, questions);
+  }
+  if (strategy === "two-stage") {
+    return evaluateTwoStageScaffold(modelClient, nudge, questions);
+  }
+  return evaluateAxisBatchedGrouped(modelClient, nudge, questions);
+};
+
 const main = async (): Promise<void> => {
   const args = parseArgs();
   const nudge = await parseNudgeInput(args);
@@ -181,12 +197,12 @@ const main = async (): Promise<void> => {
   );
   const modelClient = new JudgeModelClient(args.modelId);
 
-  const evaluationResult =
-    args.strategy === "single"
-      ? await evaluateSingle(modelClient, nudge, questions)
-      : args.strategy === "two-stage"
-        ? await evaluateTwoStageScaffold(modelClient, nudge, questions)
-        : await evaluateAxisBatchedGrouped(modelClient, nudge, questions);
+  const evaluationResult = await evaluateWithStrategy(
+    args.strategy,
+    modelClient,
+    nudge,
+    questions,
+  );
 
   const output: JudgeRunOutput = {
     run: {

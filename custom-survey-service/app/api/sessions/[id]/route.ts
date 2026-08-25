@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -73,7 +73,7 @@ export const GET = async (
       .from("sessions")
       .select("id, evaluator_id")
       .eq("id", id)
-      .maybeSingle(),
+      .maybeSingle<SessionRow>(),
     supabase
       .from("session_bundle")
       .select("bundle_id, question_bundles(name)")
@@ -97,7 +97,7 @@ export const GET = async (
     return NextResponse.json({ error: "Session not found." }, { status: 404 });
   }
 
-  const typedSession = session as SessionRow;
+  const typedSession = session;
   const typedBundle = bundle as BundleRow;
   const typedNudges = nudges as SessionNudgeRow[];
   const typedQuestions = questions as SessionQuestionRow[];
