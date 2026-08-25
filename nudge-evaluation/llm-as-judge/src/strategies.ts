@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -66,7 +66,7 @@ const parseScores = (payload: unknown): QuestionScore[] => {
   ) {
     throw new Error("Model response missing scores array");
   }
-  const scores = (payload as { scores: unknown }).scores;
+  const scores = payload.scores;
   if (!Array.isArray(scores)) {
     throw new Error("Model response scores is not an array");
   }

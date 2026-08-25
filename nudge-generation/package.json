@@ -23,13 +23,14 @@
     "start:python-service": "cd python_service && python -m uvicorn huggingface_service:app --reload"
   },
   "dependencies": {
-    "openai": "^4.20.0"
+    "openai": "^7.5.0"
   },
   "devDependencies": {
-    "@stanfordspezi/spezi-web-configurations": "^0.6.0",
-    "@types/node": "^22",
-    "eslint": "^9.39.2",
-    "prettier": "^3.8.1",
-    "typescript": "^5.0.0"
+    "@schmiedmayerlab/grove-configurations": "^0.1.1",
+    "@types/node": "^26",
+    "eslint": "^10.8.1",
+    "eslint-import-resolver-typescript": "^4.4.5",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3"
   }
 }

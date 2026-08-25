@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -50,13 +50,13 @@ export const POST = async (request: Request) => {
     .from("sessions")
     .select("id, evaluator_id")
     .eq("id", parsed.data.sessionId)
-    .maybeSingle();
+    .maybeSingle<SessionOwnershipRow>();
 
   if (sessionError || !sessionRow) {
     return NextResponse.json({ error: "Session not found." }, { status: 403 });
   }
 
-  const ownedSession = sessionRow as SessionOwnershipRow;
+  const ownedSession = sessionRow;
   if (ownedSession.evaluator_id !== parsed.data.evaluatorId) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }

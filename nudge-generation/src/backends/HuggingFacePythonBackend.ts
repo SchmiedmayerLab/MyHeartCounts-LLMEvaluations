@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -61,7 +61,7 @@ export class HuggingFacePythonBackend implements ModelBackend {
         extracted = extracted
           .replace(/^```json\s*/i, "") // Remove ```json at start
           .replace(/^```\s*/i, "") // Remove ``` at start (if json wasn't there)
-          .replace(/\s*```$/i, "") // Remove ``` at end
+          .replace(/```$/, "") // Remove ``` at end
           .trim();
       }
 
@@ -69,11 +69,13 @@ export class HuggingFacePythonBackend implements ModelBackend {
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === "AbortError" || error.name === "TimeoutError") {
-          throw new Error(`Request timeout after ${timeout / 1000} seconds`);
+          throw new Error(`Request timeout after ${timeout / 1000} seconds`, {
+            cause: error,
+          });
         }
         throw error;
       }
-      throw new Error(`Unknown error: ${String(error)}`);
+      throw new Error(`Unknown error: ${String(error)}`, { cause: error });
     }
   }
 

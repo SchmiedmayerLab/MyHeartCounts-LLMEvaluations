@@ -1,0 +1,42 @@
+#
+# This source file is part of the My Heart Counts LLM Evaluations open-source project
+#
+# SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+version: 2
+multi-ecosystem-groups:
+  weekly-dependencies:
+    schedule:
+      interval: "weekly"
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "npm"
+    directory: "/"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "npm"
+    directory: "/custom-survey-service"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "npm"
+    directory: "/nudge-generation"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "npm"
+    directory: "/nudge-evaluation/llm-as-judge"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "pip"
+    directory: "/nudge-evaluation"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+  - package-ecosystem: "pip"
+    directory: "/nudge-generation/python_service"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"

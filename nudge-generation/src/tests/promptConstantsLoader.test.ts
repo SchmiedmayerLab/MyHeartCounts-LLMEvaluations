@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { test } from "node:test";
 import {
   buildPrompt,
   loadPromptConstants,
@@ -26,7 +27,7 @@ const TEST_CONTEXT = {
 const EXPECTED_PROMPT_SHA256 =
   "31f11a3dde9e5874927935e75ac5df49f36ecc8235deb3d6b662abfe85ee8944";
 
-const run = () => {
+void test("buildPrompt renders the pinned prompt for a known context", () => {
   const constants = loadPromptConstants();
   assert.equal(constants.schemaVersion, "1.0.0");
   assert.ok(
@@ -39,7 +40,4 @@ const run = () => {
   const hash = createHash("sha256").update(prompt).digest("hex");
   assert.equal(hash, EXPECTED_PROMPT_SHA256);
   assert.equal(prompt.includes("{{"), false);
-};
-
-run();
-console.log("promptConstantsLoader.test.ts passed");
+});

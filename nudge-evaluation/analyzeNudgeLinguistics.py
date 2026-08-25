@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+This source file is part of the My Heart Counts LLM Evaluations open-source project
 
 SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 
@@ -349,7 +349,11 @@ def generate_summary_statistics(df: pd.DataFrame, output_file: Optional[str] = N
     summary_df = pd.DataFrame(summary_data)
     
     # Round numeric columns
-    numeric_cols = summary_df.select_dtypes(include=['float64']).columns
+    numeric_cols = [
+        column
+        for column in summary_df.columns
+        if pd.api.types.is_float_dtype(summary_df[column])
+    ]
     summary_df[numeric_cols] = summary_df[numeric_cols].round(2)
     
     if output_file is None:

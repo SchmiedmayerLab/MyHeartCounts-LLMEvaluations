@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -344,7 +344,7 @@ export const POST = async (request: Request) => {
       seed: `${evaluator.id}:${evaluatorSessionCountNumber + 1}`,
     })
     .select("id")
-    .single();
+    .single<SessionRow>();
 
   if (sessionError) {
     return NextResponse.json(
@@ -353,7 +353,7 @@ export const POST = async (request: Request) => {
     );
   }
 
-  const createdSession = sessionRow as SessionRow;
+  const createdSession = sessionRow;
   const inserts = (await Promise.all([
     supabase.from("session_bundle").insert({
       session_id: createdSession.id,

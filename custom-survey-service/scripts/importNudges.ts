@@ -1,5 +1,5 @@
 //
-// This source file is part of the Stanford Biodesign Digital Health MyHeart Counts open-source project based on the Stanford Spezi Template Application project
+// This source file is part of the My Heart Counts LLM Evaluations open-source project
 //
 // SPDX-FileCopyrightText: 2025-2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 //
@@ -132,7 +132,7 @@ const main = async () => {
     if (!response) {
       continue;
     }
-    let parsedNudges: Array<{ title: string; body: string }> = [];
+    let parsedNudges: Array<{ title: string; body: string }>;
     try {
       parsedNudges = parseResponse(response.raw);
     } catch (error: unknown) {
